@@ -8,6 +8,7 @@ import configparser
 import requests
 from requests.structures import CaseInsensitiveDict
 import signal
+import logging
 
 STOP_BUTTON_PIN = 10
 GREEN_LED_PIN = 8
@@ -29,7 +30,7 @@ class BridgeState(Enum):
 	DEACTIVE = 4
 
 
-#blinkTime = 0.5
+logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG) # CRITICAL, ERROR, WARNING, INFO, DEBUG
 
 MIFAREReader = MFRC522.MFRC522()
 
@@ -90,6 +91,12 @@ def doHeartbeat():
 		}
 
 		resp = requests.post(url, data = data, headers=headers)
+
+		if resp.status_code == 200:
+				response = json.loads(response.content.decode('utf-8'))
+				logging.debug("Heartbeat sent")
+			else:
+				logging.warning("Heartbeat failed")
 
 		# print request object 
 		print(resp.content) 

@@ -8,7 +8,7 @@ import MFRC522 # from https://github.com/danjperron/MFRC522-python
 
 import serial
 
-logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO) # CRITICAL, ERROR, WARNING, INFO, DEBUG
+logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG) # CRITICAL, ERROR, WARNING, INFO, DEBUG
 
 class Fabman(object):
 
@@ -19,7 +19,7 @@ class Fabman(object):
 		if (account_id is not None):
 			self.account_id = account_id
 		else: # take first account_id in list (sort by id asc)
-			self.api_header = {'Authorization': 'Bearer 0adb0caf-a2ae-4586-a74e-fe0a54f06a93'}
+			self.api_header = {'Authorization': 'Bearer ' + api_token}
 			api_endpoint = 'accounts'
 			query_string = 'limit=1&orderBy=id&order=asc'
 			api_url = self.api_url_base + api_endpoint + '?' + query_string
@@ -176,7 +176,7 @@ class Relay(object):
 		except Exception as e: 
 			logging.error('Function Relay.__init__ raised exception (' + str(e) + ')')
 
-	def on(self): 
+	def on(self):
 		try:
 			GPIO.output(self.signal_pin, 1)
 			self.state = 1

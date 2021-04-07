@@ -1,7 +1,7 @@
 {
 	"api_url_base"       : "https://fabman.io/api/v1/",
 	"reader_type"        : "MFRC522",
-	"api_token"          : "XXXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXX",
-	"left_button"        : 24,
-	"relay"              : 26
+	"api_token"          : "640c6085-8f75-4c87-9619-99a552f1fa55",
+	"left_button"        : 10,
+	"relay"              : 7
 }
