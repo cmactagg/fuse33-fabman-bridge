@@ -1,5 +1,6 @@
 import RPi.GPIO as GPIO
 from time import sleep
+import time
 from mfrc522 import SimpleMFRC522
 import MFRC522
 from enum import Enum
@@ -9,6 +10,8 @@ import requests
 from requests.structures import CaseInsensitiveDict
 import signal
 import logging
+import sys
+import json
 
 STOP_BUTTON_PIN = 10
 GREEN_LED_PIN = 8
@@ -45,15 +48,29 @@ GPIO.setup(RED_LED_PIN, GPIO.OUT, initial=GPIO.LOW)
 GPIO.setup(RELAY_PIN, GPIO.OUT, initial=GPIO.HIGH)
 
 config = configparser.ConfigParser()
-config.read("bridge-config.ini")
+bridgeConfigFileName = "bridge-config.ini"
+config.read(bridgeConfigFileName)
 print(config["fabman"]["heartbeat-time-sec"])
 HEARTBEAT_TIME_SEC = int(config["fabman"]["heartbeat-time-sec"])
 print(config["fabman"]["auth-token"])
 AUTH_TOKEN = config["fabman"]["auth-token"]
+API_URL = config["fabman"]["api-url"]
+
 
 reader = SimpleMFRC522()
 
 continueReading = True
+
+
+
+def saveConfig(bridgeConfigId):
+	config.set("fabman", "bridgeConfigId", str(bridgeConfigId))
+
+	global bridgeConfigFileName
+	# save to a file
+	with open(bridgeConfigFileName, 'w') as configfile:
+		config.write(configfile)
+
 
 def uidToString(uid):
 	mystring = ""
@@ -76,33 +93,37 @@ def stopButtonHandler(channel):
 	stopMachine()
 
 def doHeartbeat():
+	global API_URL
+	global AUTH_TOKEN
+	global config
+
 	while True:
-		print("heartbeat sent")
-
-		url = "https://fabman.io/api/v1/bridge/heartbeat"
-
+		logging.debug("heartbeat sent")
+		
 		headers = CaseInsensitiveDict()
 		headers["Accept"] = "application/json"
-		headers["Authorization"] = "Bearer 640c6085-8f75-4c87-9619-99a552f1fa55" #use the bridge api key
+		headers["Authorization"] = "Bearer " + AUTH_TOKEN #use the bridge api key
 
 		data = {
 		#"uptime": 0,
-		  "configVersion": 0
+		  "configVersion": config["fabman"]["bridgeConfigId"]
 		}
 
-		resp = requests.post(url, data = data, headers=headers)
+		logging.debug("Heartbeat sent")
+		resp = requests.post(API_URL + "/bridge/heartbeat", data = data, headers=headers)
+
+		# print request object
+		logging.debug(resp.content)
 
 		if resp.status_code == 200:
-				response = json.loads(response.content.decode('utf-8'))
-				logging.debug("Heartbeat sent")
-			else:
-				logging.warning("Heartbeat failed")
-
-		# print request object 
-		print(resp.content) 
+			response = json.loads(resp.content.decode('utf-8'))
+			if response["config"] != None:
+				saveConfig(response["config"]["configVersion"])
+			logging.debug("Heartbeat success")
+		else:
+			logging.warning("Heartbeat failed")
 
 		sleep(HEARTBEAT_TIME_SEC)
-
 
 
 def startHeartbeatThread():
@@ -117,7 +138,7 @@ def blinkLed(pins, iterations = 3, blinkSec = .5):
 			GPIO.output(pin, lowHigh)
 		iterationCounter += 1
 		lowHigh = GPIO.LOW if lowHigh == GPIO.HIGH else GPIO.HIGH
-		print("blink")
+		logging.debug("blink")
 		sleep(blinkSec)
 
 
@@ -145,6 +166,8 @@ def displayLedState(ledDisplayState):
 		blinkLed([GREEN_LED_PIN, RED_LED_PIN], 3, 2)
 
 def activateRelay(activate):
+
+	logging.debug('activating relay ' + str(activate))
 	pinState = GPIO.HIGH
 
 	if activate:
@@ -155,95 +178,139 @@ def activateRelay(activate):
 	GPIO.output(RELAY_PIN, pinState)
 
 
-def startMachineFabmanApi(rfid):
-	try:
-		url = "https://fabman.io/api/v1/bridge/access"
+def doMachineStopTimer(machineOnForSec):
+	machineEndTime = time.time() + machineOnForSec
+	doStopMachine = False
+	while not doStopMachine:
+		logging.debug('checking machine stop ' + str(machineOnForSec))
+		if time.time() > machineEndTime:
+			doStopMachine = True
+			stopMachine()
+		sleep(1) #check every second
 
+def startMachineStopThread(machineOnForSec):
+	_thread.start_new_thread(doMachineStopTimer, (machineOnForSec,))
+
+
+def startMachineFabmanApi(rfid):
+	global API_URL
+	global AUTH_TOKEN
+	global config
+
+	allowAccess = False
+	try:
 		headers = CaseInsensitiveDict()
 		headers["Accept"] = "application/json"
-		headers["Authorization"] = "Bearer 640c6085-8f75-4c87-9619-99a552f1fa55" #use the bridge api key
+		headers["Authorization"] = "Bearer " + AUTH_TOKEN #use the bridge api key
 
 		data = {
 		  #"member": 224972,
-		  #"emailAddress":  "mtags22@gmail.com",
+		  #"emailAddress":  "abc@123.com",
 		  "keys": [ { "type": "nfca", "token": rfid } ],
-		  "configVersion": 0
+		  "configVersion": config["fabman"]["bridgeConfigId"]
 		}
-		resp = requests.post(url, json = data, headers=headers)
+		resp = requests.post(API_URL + "/bridge/access", json = data, headers = headers)
 
-		respContent = resp.json()
+		jsonResp = json.loads(resp.content.decode('utf-8'))
 
-		print(respContent)
+		logging.debug(jsonResp)
 
-		global bridgeSessionId
-		bridgeSessionId = respContent['sessionId']
+		accessType = jsonResp['type']
 
-		print(bridgeSessionId)
-		# print request object 
+		logging.debug('accessType ' + accessType)
+
+		if (resp.status_code == 200 and accessType == "allowed"):
+			respContent = resp.json()
+
+			global bridgeSessionId
+			bridgeSessionId = respContent['sessionId']
+			allowAccess = True
+			logging.debug(bridgeSessionId)
+			machineOnForSec = respContent['maxDuration']
+			if machineOnForSec != None:
+				startMachineStopThread(machineOnForSec)
+		else:
+			respMessages = jsonResp['messages']
+			logging.warning(respMessages)
+			logging.warning('Bridge could not be started (rfid: ' + str(rfid) + ')')
+
 	except Exception as e:
+		print(e)
 		print("Error calling Access")
 
-def stopMachineFabmanApi():
-	#import json
-	#from io import StringIO
+	return allowAccess
 
-	url = "https://fabman.io/api/v1/bridge/stop"
+def stopMachineFabmanApi():
+	global API_URL
+	global AUTH_TOKEN
+	global config
+
+	allowStop = False
 
 	headers = CaseInsensitiveDict()
 	headers["Accept"] = "application/json"
-	headers["Authorization"] = "Bearer 640c6085-8f75-4c87-9619-99a552f1fa55" #use the bridge api key
+	headers["Authorization"] = "Bearer " + AUTH_TOKEN #use the bridge api key
 	global bridgeSessionId
-	print(bridgeSessionId)
+	logging.debug(bridgeSessionId)
 
 	dataStop = { "stopType": "normal", "currentSession": { "id": bridgeSessionId } }
 
-	resp = requests.post(url, json = dataStop, headers=headers)
-    
+	resp = requests.post(API_URL + "/bridge/stop", json = dataStop, headers = headers)
+
+	logging.debug(resp.content)
+
+	if resp.status_code == 200 or resp.status_code == 204:
+		#self.session_id = None
+		bridgeSessionId = 0
+		allowStop = True
+		logging.info('Bridge stopped successfully.')
+	else:
+		logging.error('Bridge could not be stopped (status code ' + str(resp.status_code) + ')')
+
 	# print request object 
 	print(resp.content) 
-	bridgeSessionId = 0
 
+	return allowStop
 
 def startMachine(rfid):
+
+	global bridgeSessionId
+	if bridgeSessionId != 0:
+		stopMachine()
+
+
 	displayLedState(LedDisplayState.THINKING)
 	displayLedState(LedDisplayState.AUTH_PASS)
-	print("starting machine")
-	startMachineFabmanApi(rfid)
-	print("machine started")
-	displayLedState(LedDisplayState.ACTIVE)
-	#GPIO.output(RELAY_PIN, GPIO.LOW)
-	activateRelay(True)
+	logging.info("starting machine")
+	if startMachineFabmanApi(rfid):
+		logging.info("machine started")
+		displayLedState(LedDisplayState.ACTIVE)
+		#GPIO.output(RELAY_PIN, GPIO.LOW)
+		activateRelay(True)
+	else:
+		displayLedState(LedDisplayState.ERROR)
+		displayLedState(LedDisplayState.DEACTIVE)
+		
 def stopMachine():
 	displayLedState(LedDisplayState.DEACTIVE)
-	print("stopping machine")
-	stopMachineFabmanApi()
-	print("machine stopped")
-	#GPIO.output(RELAY_PIN, GPIO.HIGH)
-	activateRelay(False)
+	logging.info("stopping machine")
+	if stopMachineFabmanApi():
+		logging.info("machine stopped")
+		activateRelay(False)
+	else:
+		displayLedState(LedDisplayState.ERROR)
+
 
 try:
 	GPIO.add_event_detect(STOP_BUTTON_PIN, GPIO.RISING, callback=stopButtonHandler)
 	startHeartbeatThread()
-
-	#while True:
-		#print("read to read...")
-		#id, text = reader.read()
-		#print(id)
-		#print(text)
-		#startMachine()
-		#while True:
-			#if GPIO.input(STOP_BUTTON_PIN) == GPIO.HIGH:
-				#stopMachine()
-				#break
-		#sleep(.25)
-
 
 
 	while continueReading:
 
 		# Scan for cards
 		(status, TagType) = MIFAREReader.MFRC522_Request(MIFAREReader.PICC_REQIDL)
-
+		#logging.info(TagType)
 		# If a card is found
 		if status == MIFAREReader.MI_OK:
 			print ("Card detected")
