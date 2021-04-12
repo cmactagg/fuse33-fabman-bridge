@@ -1,7 +1,6 @@
 import RPi.GPIO as GPIO
 from time import sleep
 import time
-from mfrc522 import SimpleMFRC522
 import MFRC522
 from enum import Enum
 import _thread
@@ -18,27 +17,36 @@ GREEN_LED_PIN = 8
 RED_LED_PIN = 12
 RELAY_PIN = 7
 
-class LedDisplayState(Enum):
+class LedDisplayStateEnum(Enum):
 	ACTIVE = 1
-	DEACTIVE = 2
-	AUTH_PASS = 3
-	AUTH_FAIL = 4
-	THINKING = 5
-	ERROR = 6
+	INACTIVE = 2
+	ACTIVATE_ALLOWED = 3
+	ACTIVATE_DENIED = 4
+	ACTIVATE_FAILED = 5
+	CHECK_IN_OUT_FAILED = 6
+	OFFLINE = 7
+	ERROR = 8
+	THINKING = 9
 
-class BridgeState(Enum):
-	ACTIVATING = 1
-	ACTIVE = 2
-	DEACTIVATING = 3
-	DEACTIVE = 4
+class BridgeState():
+	def __init__(self):
+		self.isBridgeEnabled = True
+		self.isActive = False
+		self.isOnline = False
+		self.ledDisplayState = LedDisplayStateEnum.ERROR
+		self.bridgeSessionId = 0
+		self.heartbeatConsecutiveFailures = 0
+		self.configVersion = 0
+		self.bridgeName = ""
+		self.bridgeType = ""
+		self.heartbeatTimeSec = 5 #this will quickly be overwritten
+		self.authToken = ""
+		self.apiUrl = ""
 
 
 logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG) # CRITICAL, ERROR, WARNING, INFO, DEBUG
 
 MIFAREReader = MFRC522.MFRC522()
-
-bridgeState = BridgeState.DEACTIVE
-bridgeSessionId = 0
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BOARD)
@@ -50,26 +58,30 @@ GPIO.setup(RELAY_PIN, GPIO.OUT, initial=GPIO.HIGH)
 config = configparser.ConfigParser()
 bridgeConfigFileName = "bridge-config.ini"
 config.read(bridgeConfigFileName)
-print(config["fabman"]["heartbeat-time-sec"])
-HEARTBEAT_TIME_SEC = int(config["fabman"]["heartbeat-time-sec"])
-print(config["fabman"]["auth-token"])
-AUTH_TOKEN = config["fabman"]["auth-token"]
-API_URL = config["fabman"]["api-url"]
 
-
-reader = SimpleMFRC522()
-
-continueReading = True
+#print(config["fabman"]["heartbeat-time-sec"])
+#HEARTBEAT_TIME_SEC = int(config["fabman"]["heartbeat-time-sec"])
+#print(config["fabman"]["auth-token"])
+#AUTH_TOKEN = config["fabman"]["auth-token"]
+#API_URL = config["fabman"]["api-url"]
 
 
 
-def saveConfig(bridgeConfigId):
-	config.set("fabman", "bridgeConfigId", str(bridgeConfigId))
+bridgeState = BridgeState()
+bridgeState.heartbeatTimeSec = int(config["fabman"]["heartbeat-time-sec"])
+bridgeState.authToken = config["fabman"]["auth-token"]
+bridgeState.apiUrl = config["fabman"]["api-url"]
 
-	global bridgeConfigFileName
-	# save to a file
-	with open(bridgeConfigFileName, 'w') as configfile:
-		config.write(configfile)
+
+
+
+#def saveConfig(bridgeConfigId):
+#	config.set("fabman", "bridgeConfigId", str(bridgeConfigId))
+
+#	global bridgeConfigFileName
+#	# save to a file
+#	with open(bridgeConfigFileName, 'w') as configfile:
+#		config.write(configfile)
 
 
 def uidToString(uid):
@@ -79,13 +91,13 @@ def uidToString(uid):
 	return mystring
 
 
-def end_read(signal, frame):
-	global continueReading
+def disableBridge(signal, frame):
+	global bridgeState
 	print("Ctrl+C captured, ending read.")
-	continueReading = False
+	bridgeState.isBridgeEnabled = False
 	GPIO.cleanup()
 
-signal.signal(signal.SIGINT, end_read)
+signal.signal(signal.SIGINT, disableBridge)
 
 
 def stopButtonHandler(channel):
@@ -93,24 +105,25 @@ def stopButtonHandler(channel):
 	stopMachine()
 
 def doHeartbeat():
-	global API_URL
-	global AUTH_TOKEN
-	global config
+	global bridgeState
+#	global API_URL
+#	global AUTH_TOKEN
+#	global config
 
 	while True:
 		logging.debug("heartbeat sent")
 		
 		headers = CaseInsensitiveDict()
 		headers["Accept"] = "application/json"
-		headers["Authorization"] = "Bearer " + AUTH_TOKEN #use the bridge api key
+		headers["Authorization"] = "Bearer " + bridgeState.authToken #use the bridge api key
 
 		data = {
 		#"uptime": 0,
-		  "configVersion": config["fabman"]["bridgeConfigId"]
+		  "configVersion": bridgeState.configVersion
 		}
 
 		logging.debug("Heartbeat sent")
-		resp = requests.post(API_URL + "/bridge/heartbeat", data = data, headers=headers)
+		resp = requests.post(bridgeState.apiUrl + "/bridge/heartbeat", data = data, headers = headers)
 
 		# print request object
 		logging.debug(resp.content)
@@ -118,12 +131,40 @@ def doHeartbeat():
 		if resp.status_code == 200:
 			response = json.loads(resp.content.decode('utf-8'))
 			if response["config"] != None:
-				saveConfig(response["config"]["configVersion"])
+				bridgeState.configVersion = response["config"]["configVersion"]
+				bridgeState.bridgeName = response["config"]["name"]
+				bridgeState.bridgeType = response["config"]["controlType"] 
+				#saveConfig(response["config"]["configVersion"])
 			logging.debug("Heartbeat success")
+			bridgeState.isOnline = True
+			bridgeState.heartbeatConsecutiveFailures = 0
 		else:
 			logging.warning("Heartbeat failed")
+			bridgeState.heartbeatConsecutiveFailurest += 1
+			if bridgeState.heartbeatConsecutiveFailures >= 3:
+				bridgeState.isOnline = False
 
-		sleep(HEARTBEAT_TIME_SEC)
+		sleep(bridgeState.heartbeatTimeSec)
+
+
+def doLedDisplay():
+	global bridgeState
+	while bridgeState.isBridgeEnabled:
+		GPIO.output(RED_LED_PIN, GPIO.LOW)
+		GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+
+
+
+
+
+
+
+
+		sleep(.5)
+
+def startLedThread():
+	#_thread.start_new_thread(doLedDisplay, ())
+	s = 5
 
 
 def startHeartbeatThread():
@@ -143,24 +184,25 @@ def blinkLed(pins, iterations = 3, blinkSec = .5):
 
 
 
+
 def displayLedState(ledDisplayState):
-	if ledDisplayState == LedDisplayState.ACTIVE:
+	if ledDisplayState == LedDisplayStateEnum.ACTIVE:
 		GPIO.output(RED_LED_PIN, GPIO.LOW)
 		GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
-	elif ledDisplayState == LedDisplayState.DEACTIVE:
+	elif ledDisplayState == LedDisplayStateEnum.INACTIVE:
 		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 		GPIO.output(RED_LED_PIN, GPIO.HIGH)
-	elif ledDisplayState == LedDisplayState.AUTH_PASS:
+	elif ledDisplayState == LedDisplayStateEnum.AUTH_PASS:
 		GPIO.output(RED_LED_PIN, GPIO.LOW)
 		blinkLed([GREEN_LED_PIN])
-	elif ledDisplayState == LedDisplayState.AUTH_FAIL:
+	elif ledDisplayState == LedDisplayStateEnum.AUTH_FAIL:
 		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 		blinkLed([RED_LED_PIN])
-	elif ledDisplayState == LedDisplayState.THINKING:
+	elif ledDisplayState == LedDisplayStateEnum.THINKING:
 		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 		GPIO.output(RED_LED_PIN, GPIO.LOW)
 		blinkLed([GREEN_LED_PIN, RED_LED_PIN])
-	elif ledDisplayState == LedDisplayState.ERROR:
+	elif ledDisplayState == LedDisplayStateEnum.ERROR:
 		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 		GPIO.output(RED_LED_PIN, GPIO.LOW)
 		blinkLed([GREEN_LED_PIN, RED_LED_PIN], 3, 2)
@@ -179,6 +221,8 @@ def activateRelay(activate):
 
 
 def doMachineStopTimer(machineOnForSec):
+	global bridgeState
+	
 	machineEndTime = time.time() + machineOnForSec
 	doStopMachine = False
 	while not doStopMachine:
@@ -186,30 +230,54 @@ def doMachineStopTimer(machineOnForSec):
 		if time.time() > machineEndTime:
 			doStopMachine = True
 			stopMachine()
-		sleep(1) #check every second
+		elif bridgeState.isActive == False:
+			doStopMachine = True
+		sleep(.5) #check every half second
 
 def startMachineStopThread(machineOnForSec):
 	_thread.start_new_thread(doMachineStopTimer, (machineOnForSec,))
 
 
-def startMachineFabmanApi(rfid):
-	global API_URL
-	global AUTH_TOKEN
-	global config
+def startMachine(rfid):
 
-	allowAccess = False
+	global bridgeState
+        
+	if bridgeState.isActive == True and bridgeSessionId != 0:
+                stopMachine()
+
+
+	bridgeState.ledDisplayState = LedDisplayStateEnum.THINKING
+	logging.info("starting machine")
+#        if startMachineFabmanApi(rfid):
+#                logging.info("machine started")
+#                displayLedState(LedDisplayState.ACTIVE)
+#                #GPIO.output(RELAY_PIN, GPIO.LOW)
+#                activateRelay(True)
+#        else:
+#                displayLedState(LedDisplayState.ERROR)
+#                displayLedState(LedDisplayState.DEACTIVE)
+
+
+
+
+
+#	global API_URL
+#	global AUTH_TOKEN
+#	global config
+
+#	allowAccess = False
 	try:
 		headers = CaseInsensitiveDict()
 		headers["Accept"] = "application/json"
-		headers["Authorization"] = "Bearer " + AUTH_TOKEN #use the bridge api key
+		headers["Authorization"] = "Bearer " + bridgeState.authToken #use the bridge api key
 
 		data = {
 		  #"member": 224972,
 		  #"emailAddress":  "abc@123.com",
 		  "keys": [ { "type": "nfca", "token": rfid } ],
-		  "configVersion": config["fabman"]["bridgeConfigId"]
+		  "configVersion": bridgeState.configVersion
 		}
-		resp = requests.post(API_URL + "/bridge/access", json = data, headers = headers)
+		resp = requests.post(bridgeState.apiUrl + "/bridge/access", json = data, headers = headers)
 
 		jsonResp = json.loads(resp.content.decode('utf-8'))
 
@@ -219,113 +287,165 @@ def startMachineFabmanApi(rfid):
 
 		logging.debug('accessType ' + accessType)
 
-		if (resp.status_code == 200 and accessType == "allowed"):
+		if resp.status_code == 200:
 			respContent = resp.json()
+			if accessType == "allowed":
+				bridgeState.bridgeSessionId = respContent['sessionId']
+				bridgeState.isActive = True
+				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
+				sleep(2)
+				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
+				activateRelay(True)
+				logging.debug(bridgeState.bridgeSessionId)
+				machineOnForSec = respContent['maxDuration']
+				if machineOnForSec != None:
+					startMachineStopThread(machineOnForSec)
 
-			global bridgeSessionId
-			bridgeSessionId = respContent['sessionId']
-			allowAccess = True
-			logging.debug(bridgeSessionId)
-			machineOnForSec = respContent['maxDuration']
-			if machineOnForSec != None:
-				startMachineStopThread(machineOnForSec)
+			elif accessType == "denied":
+				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_DENIED
+				sleep(2)
+				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
+
+			elif accessType == "checkIn":
+				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
+				sleep(2)
+				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
+
+			elif accessType == "checkOut":
+				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
+				sleep(2)
+				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 		else:
 			respMessages = jsonResp['messages']
 			logging.warning(respMessages)
+			bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_FAILED
+			sleep(2)
+			bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 			logging.warning('Bridge could not be started (rfid: ' + str(rfid) + ')')
 
 	except Exception as e:
 		print(e)
 		print("Error calling Access")
+		bridgeState.ledDisplayState = LedDisplayStateEnum.ERROR
+		sleep(2)
+		bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 
-	return allowAccess
+	#return allowAccess
 
-def stopMachineFabmanApi():
-	global API_URL
-	global AUTH_TOKEN
-	global config
+def stopMachine():
+	global bridgeState
+	#displayLedState(LedDisplayStateEnum.THINKING)
+	logging.info("stopping machine")
 
-	allowStop = False
 
 	headers = CaseInsensitiveDict()
 	headers["Accept"] = "application/json"
-	headers["Authorization"] = "Bearer " + AUTH_TOKEN #use the bridge api key
-	global bridgeSessionId
-	logging.debug(bridgeSessionId)
+	headers["Authorization"] = "Bearer " + bridgeState.authToken #use the bridge api key
+	#global bridgeSessionId
+	#logging.debug(bridgeSessionId)
 
-	dataStop = { "stopType": "normal", "currentSession": { "id": bridgeSessionId } }
+	dataStop = { "stopType": "normal", "currentSession": { "id": bridgeState.bridgeSessionId } }
 
-	resp = requests.post(API_URL + "/bridge/stop", json = dataStop, headers = headers)
+	resp = requests.post(bridgeState.apiUrl + "/bridge/stop", json = dataStop, headers = headers)
 
 	logging.debug(resp.content)
 
 	if resp.status_code == 200 or resp.status_code == 204:
 		#self.session_id = None
-		bridgeSessionId = 0
-		allowStop = True
+		bridgeState.bridgeSessionId = 0
+		bridgeState.isActive = False
+		bridgeState.ledDisplayState = LedDisplayStateEnum.INACTIVE
+		activateRelay(False)
 		logging.info('Bridge stopped successfully.')
 	else:
 		logging.error('Bridge could not be stopped (status code ' + str(resp.status_code) + ')')
+		bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 
 	# print request object 
 	print(resp.content) 
 
-	return allowStop
 
-def startMachine(rfid):
-
-	global bridgeSessionId
-	if bridgeSessionId != 0:
-		stopMachine()
-
-
-	displayLedState(LedDisplayState.THINKING)
-	displayLedState(LedDisplayState.AUTH_PASS)
-	logging.info("starting machine")
-	if startMachineFabmanApi(rfid):
-		logging.info("machine started")
-		displayLedState(LedDisplayState.ACTIVE)
-		#GPIO.output(RELAY_PIN, GPIO.LOW)
-		activateRelay(True)
-	else:
-		displayLedState(LedDisplayState.ERROR)
-		displayLedState(LedDisplayState.DEACTIVE)
+#def startMachine(rfid):
+#
+#	global bridgeState
+#	if bridgeState.isActive == True &&  bridgeSessionId != 0:
+#		stopMachine()
+#
+#
+#	displayLedState(LedDisplayState.THINKING)
+#	displayLedState(LedDisplayState.AUTH_PASS)
+#	logging.info("starting machine")
+#	if startMachineFabmanApi(rfid):
+#		logging.info("machine started")
+#		displayLedState(LedDisplayState.ACTIVE)
+#		#GPIO.output(RELAY_PIN, GPIO.LOW)
+#		activateRelay(True)
+#	else:
+#		displayLedState(LedDisplayState.ERROR)
+#		displayLedState(LedDisplayState.DEACTIVE)
 		
-def stopMachine():
-	displayLedState(LedDisplayState.DEACTIVE)
-	logging.info("stopping machine")
-	if stopMachineFabmanApi():
-		logging.info("machine stopped")
-		activateRelay(False)
-	else:
-		displayLedState(LedDisplayState.ERROR)
+#def stopMachine():
+#	displayLedState(LedDisplayState.DEACTIVE)
+#	logging.info("stopping machine")
+#	if stopMachineFabmanApi():
+#		logging.info("machine stopped")
+#		activateRelay(False)
+#	else:
+#		displayLedState(LedDisplayState.ERROR)
+
+def determineLedDisplayStateBasedOnBridgeState():
+	global bridgeState
+	ledDisplayState = LedDisplayStateEnum.INACTIVE
+
+	if bridgeState.isOnline == False:
+		ledDisplayState = LedDisplayStateEnum.OFFLINE
+	elif bridgeState.isActive == True:
+		ledDisplayState = LedDisplayStateEnum.ACTIVE
+
+	return ledDisplayState
+
+def errorReadingCard():
+	global bridgeState
+	logging.warning("error reading card")
+	bridgeState.ledDisplayState = LedDisplayStateEnum.ERROR
+	sleep(2)
+	bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
+
+
 
 
 try:
 	GPIO.add_event_detect(STOP_BUTTON_PIN, GPIO.RISING, callback=stopButtonHandler)
+	startLedThread()
 	startHeartbeatThread()
 
 
-	while continueReading:
+	while bridgeState.isBridgeEnabled:
 
 		# Scan for cards
 		(status, TagType) = MIFAREReader.MFRC522_Request(MIFAREReader.PICC_REQIDL)
 		#logging.info(TagType)
 		# If a card is found
+		logging.debug(status)
 		if status == MIFAREReader.MI_OK:
-			print ("Card detected")
+			logging.debug("Card detected")
 
 			# Get the UID of the card
 			(status, uid) = MIFAREReader.MFRC522_SelectTagSN()
 			# If we have the UID, continue
-			if status == MIFAREReader.MI_OK:
-				uid_string = uidToString(uid)
-				print("Card read UID: %s" % uid_string)
+			uid_string = uidToString(uid)
+			print("Card read UID: %s" % uid_string)
+			
+			if bridgeState.isActive == False:
 				startMachine(uid_string)
+			elif bridgeState.isActive == True:
+				stopMachine()
+				if bridgeState.isActive == False:
+					startMachine(uid_string)
 				
-			else:
-				print("Error reading card")
-
+		#elif status == MIFAREReader.MI_ERR:
+			
+		#	errorReadingCard()
 
 
 finally:
