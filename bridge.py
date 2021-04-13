@@ -149,63 +149,71 @@ def doHeartbeat():
 
 def doLedDisplay():
 	global bridgeState
+
+	previousLedDisplayState = None
+
 	while bridgeState.isBridgeEnabled:
+		ledDisplayState = bridgeState.ledDisplayState
+		if ledDisplayState != previousLedDisplayState:
+			logging.debug('led display state ' + str(ledDisplayState))
+			previousLedDisplayState = ledDisplayState
 		GPIO.output(RED_LED_PIN, GPIO.LOW)
-		GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
+		if ledDisplayState == LedDisplayStateEnum.ACTIVE:
+			GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+			sleep(.5)
+		elif ledDisplayState == LedDisplayStateEnum.INACTIVE:
+			GPIO.output(RED_LED_PIN, GPIO.HIGH)
+			sleep(.5)
+		elif ledDisplayState == LedDisplayStateEnum.ACTIVATE_ALLOWED:
+			for i in range(0, 10):				
+				GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+				sleep(.1)
+				GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+				sleep(.1)
 
+		elif ledDisplayState == LedDisplayStateEnum.ACTIVATE_DENIED:
+			for i in range(0, 10):				
+				GPIO.output(RED_LED_PIN, GPIO.HIGH)
+				sleep(.1)
+				GPIO.output(RED_LED_PIN, GPIO.LOW)
+				sleep(.1)
+		elif (ledDisplayState == LedDisplayStateEnum.ACTIVATE_FAILED
+			or ledDisplayState == LedDisplayStateEnum.CHECK_IN_OUT_FAILED
+			or ledDisplayState == LedDisplayStateEnum.ERROR):
+			for i in range(0, 10):			
+				GPIO.output(RED_LED_PIN, GPIO.HIGH)
+				GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+				sleep(.1)
+				GPIO.output(RED_LED_PIN, GPIO.LOW)
+				GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+				sleep(.1)
 
+		elif ledDisplayState == LedDisplayStateEnum.OFFLINE:
+			GPIO.output(RED_LED_PIN, GPIO.HIGH)
+			GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+			sleep(.25)
+			GPIO.output(RED_LED_PIN, GPIO.LOW)
+			GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+			sleep(.75)
 
-
-
-
-
-		sleep(.5)
+		elif ledDisplayState == LedDisplayStateEnum.THINKING:
+			GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+			GPIO.output(RED_LED_PIN, GPIO.HIGH)
+			sleep(.1)
+			GPIO.output(RED_LED_PIN, GPIO.LOW)
+			GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+			sleep(.1)
 
 def startLedThread():
-	#_thread.start_new_thread(doLedDisplay, ())
+	_thread.start_new_thread(doLedDisplay, ())
 	s = 5
 
 
 def startHeartbeatThread():
 	_thread.start_new_thread(doHeartbeat, ())
 
-
-def blinkLed(pins, iterations = 3, blinkSec = .5):
-	iterationCounter = 0
-	lowHigh = GPIO.LOW
-	while iterationCounter < iterations * 2:
-		for pin in pins:
-			GPIO.output(pin, lowHigh)
-		iterationCounter += 1
-		lowHigh = GPIO.LOW if lowHigh == GPIO.HIGH else GPIO.HIGH
-		logging.debug("blink")
-		sleep(blinkSec)
-
-
-
-
-def displayLedState(ledDisplayState):
-	if ledDisplayState == LedDisplayStateEnum.ACTIVE:
-		GPIO.output(RED_LED_PIN, GPIO.LOW)
-		GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
-	elif ledDisplayState == LedDisplayStateEnum.INACTIVE:
-		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
-		GPIO.output(RED_LED_PIN, GPIO.HIGH)
-	elif ledDisplayState == LedDisplayStateEnum.AUTH_PASS:
-		GPIO.output(RED_LED_PIN, GPIO.LOW)
-		blinkLed([GREEN_LED_PIN])
-	elif ledDisplayState == LedDisplayStateEnum.AUTH_FAIL:
-		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
-		blinkLed([RED_LED_PIN])
-	elif ledDisplayState == LedDisplayStateEnum.THINKING:
-		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
-		GPIO.output(RED_LED_PIN, GPIO.LOW)
-		blinkLed([GREEN_LED_PIN, RED_LED_PIN])
-	elif ledDisplayState == LedDisplayStateEnum.ERROR:
-		GPIO.output(GREEN_LED_PIN, GPIO.LOW)
-		GPIO.output(RED_LED_PIN, GPIO.LOW)
-		blinkLed([GREEN_LED_PIN, RED_LED_PIN], 3, 2)
 
 def activateRelay(activate):
 
@@ -248,24 +256,7 @@ def startMachine(rfid):
 
 	bridgeState.ledDisplayState = LedDisplayStateEnum.THINKING
 	logging.info("starting machine")
-#        if startMachineFabmanApi(rfid):
-#                logging.info("machine started")
-#                displayLedState(LedDisplayState.ACTIVE)
-#                #GPIO.output(RELAY_PIN, GPIO.LOW)
-#                activateRelay(True)
-#        else:
-#                displayLedState(LedDisplayState.ERROR)
-#                displayLedState(LedDisplayState.DEACTIVE)
 
-
-
-
-
-#	global API_URL
-#	global AUTH_TOKEN
-#	global config
-
-#	allowAccess = False
 	try:
 		headers = CaseInsensitiveDict()
 		headers["Accept"] = "application/json"
@@ -293,7 +284,7 @@ def startMachine(rfid):
 				bridgeState.bridgeSessionId = respContent['sessionId']
 				bridgeState.isActive = True
 				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
-				sleep(2)
+				sleep(3)
 				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 				activateRelay(True)
 				logging.debug(bridgeState.bridgeSessionId)
@@ -303,17 +294,17 @@ def startMachine(rfid):
 
 			elif accessType == "denied":
 				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_DENIED
-				sleep(2)
+				sleep(3)
 				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 
 			elif accessType == "checkIn":
 				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
-				sleep(2)
+				sleep(3)
 				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 
 			elif accessType == "checkOut":
 				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
-				sleep(2)
+				sleep(3)
 				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 		else:
 			respMessages = jsonResp['messages']
@@ -336,7 +327,7 @@ def stopMachine():
 	global bridgeState
 	#displayLedState(LedDisplayStateEnum.THINKING)
 	logging.info("stopping machine")
-
+	bridgeState.ledDisplayState = LedDisplayStateEnum.THINKING
 
 	headers = CaseInsensitiveDict()
 	headers["Accept"] = "application/json"
@@ -359,39 +350,14 @@ def stopMachine():
 		logging.info('Bridge stopped successfully.')
 	else:
 		logging.error('Bridge could not be stopped (status code ' + str(resp.status_code) + ')')
+		bridgeState.ledDisplayState = LedDisplayStateEnum.ERROR
+		sleep(2)
 		bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 
 	# print request object 
 	print(resp.content) 
 
 
-#def startMachine(rfid):
-#
-#	global bridgeState
-#	if bridgeState.isActive == True &&  bridgeSessionId != 0:
-#		stopMachine()
-#
-#
-#	displayLedState(LedDisplayState.THINKING)
-#	displayLedState(LedDisplayState.AUTH_PASS)
-#	logging.info("starting machine")
-#	if startMachineFabmanApi(rfid):
-#		logging.info("machine started")
-#		displayLedState(LedDisplayState.ACTIVE)
-#		#GPIO.output(RELAY_PIN, GPIO.LOW)
-#		activateRelay(True)
-#	else:
-#		displayLedState(LedDisplayState.ERROR)
-#		displayLedState(LedDisplayState.DEACTIVE)
-		
-#def stopMachine():
-#	displayLedState(LedDisplayState.DEACTIVE)
-#	logging.info("stopping machine")
-#	if stopMachineFabmanApi():
-#		logging.info("machine stopped")
-#		activateRelay(False)
-#	else:
-#		displayLedState(LedDisplayState.ERROR)
 
 def determineLedDisplayStateBasedOnBridgeState():
 	global bridgeState
@@ -421,12 +387,13 @@ try:
 
 
 	while bridgeState.isBridgeEnabled:
-
+		
+		bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 		# Scan for cards
 		(status, TagType) = MIFAREReader.MFRC522_Request(MIFAREReader.PICC_REQIDL)
 		#logging.info(TagType)
 		# If a card is found
-		logging.debug(status)
+		#logging.debug(status)
 		if status == MIFAREReader.MI_OK:
 			logging.debug("Card detected")
 
@@ -446,7 +413,7 @@ try:
 		#elif status == MIFAREReader.MI_ERR:
 			
 		#	errorReadingCard()
-
+		sleep(.5)
 
 finally:
 	GPIO.cleanup()
