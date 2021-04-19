@@ -117,6 +117,7 @@ def doHeartbeat():
 				bridgeState.configVersion = response["config"]["configVersion"]
 				bridgeState.bridgeName = response["config"]["name"]
 				bridgeState.bridgeType = response["config"]["controlType"] 
+				activateRelay()
 			logging.debug("Heartbeat success")
 			bridgeState.isOnline = True
 			bridgeState.heartbeatConsecutiveFailures = 0
@@ -197,10 +198,17 @@ def startHeartbeatThread():
 	_thread.start_new_thread(doHeartbeat, ())
 
 
-def activateRelay(activate):
+def activateRelay():
+	global bridgeState
 
-	logging.debug('activating relay ' + str(activate))
 	pinState = GPIO.HIGH
+
+	activate = bridgeState.isActive
+
+	if bridgeState.bridgeType == 'door': #door should have the relay on when inactive
+		activate = not activate
+
+	logging.debug('activating relay ' + str(activate) + ' for ' + bridgeState.bridgeType)
 
 	if activate:
 		pinState = GPIO.LOW
@@ -268,7 +276,7 @@ def startMachine(rfid):
 				bridgeState.ledDisplayState = LedDisplayStateEnum.ACTIVATE_ALLOWED
 				sleep(3)
 				bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
-				activateRelay(True)
+				activateRelay()
 				logging.debug(bridgeState.bridgeSessionId)
 				machineOnForSec = respContent['maxDuration']
 				if machineOnForSec != None:
@@ -322,7 +330,7 @@ def stopMachine():
 		bridgeState.bridgeSessionId = 0
 		bridgeState.isActive = False
 		bridgeState.ledDisplayState = LedDisplayStateEnum.INACTIVE
-		activateRelay(False)
+		activateRelay()
 		logging.info('Bridge stopped successfully.')
 	else:
 		logging.error('Bridge could not be stopped (status code ' + str(resp.status_code) + ')')
