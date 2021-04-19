@@ -375,13 +375,13 @@ try:
 			# If we have the UID, continue
 			uid_string = uidToString(uid)
 			logging.info("Card read UID: %s" % uid_string)
-			
-			if bridgeState.isActive == False:
-				startMachine(uid_string)
-			elif bridgeState.isActive == True:
-				stopMachine()
+			if len(uid_string) > 0:
 				if bridgeState.isActive == False:
 					startMachine(uid_string)
+				elif bridgeState.isActive == True:
+					stopMachine()
+					if bridgeState.isActive == False:
+						startMachine(uid_string)
 		sleep(.5)
 
 finally:
