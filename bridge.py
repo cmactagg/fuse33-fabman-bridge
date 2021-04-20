@@ -46,9 +46,8 @@ class BridgeState():
 		self.apiUrl = ""
 
 
-#logging.basicConfig(stream=sys.stdout, format='%(asctime)s - %(levelname)s - %(message)s', level=logging.DEBUG) # CRITICAL, ERROR, WARNING, INFO, DEBUG
 
-log_file_path = path.join(path.dirname(path.abspath(__file__)), 'logging.ini')
+log_file_path = path.join(path.dirname(path.abspath(__file__)), '/home/pi/fuse33-fabman-bridge/logging.ini')
 logging.config.fileConfig(fname=log_file_path, disable_existing_loggers=False)
 logging = logging.getLogger(__name__)
 
@@ -62,7 +61,7 @@ GPIO.setup(RED_LED_PIN, GPIO.OUT, initial=GPIO.LOW)
 GPIO.setup(RELAY_PIN, GPIO.OUT, initial=GPIO.HIGH)
 
 config = configparser.ConfigParser()
-bridgeConfigFileName = "bridge-config.ini"
+bridgeConfigFileName = "/home/pi/fuse33-fabman-bridge/bridge-config.ini"
 config.read(bridgeConfigFileName)
 
 bridgeState = BridgeState()
@@ -86,7 +85,7 @@ def disableBridge(signal, frame):
 signal.signal(signal.SIGINT, disableBridge)
 
 
-def stopButtonHandler(channel):
+def stopButtonHandler(channel = None):
 	logging.info("stop button pushed")
 	stopMachine()
 
@@ -106,7 +105,7 @@ def doHeartbeat():
 		}
 
 		logging.debug("Heartbeat sent")
-		resp = requests.post(bridgeState.apiUrl + "/bridge/heartbeat", data = data, headers = headers)
+		resp = requests.post(bridgeState.apiUrl + "/bridge/heartbeat", data = data, headers = headers, timeout=10)
 
 		# print request object
 		logging.debug(resp.content)
@@ -224,7 +223,6 @@ def doMachineStopTimer(machineOnForSec):
 	machineEndTime = time.time() + machineOnForSec
 	doStopMachine = False
 	while not doStopMachine:
-		#logging.debug('checking machine stop ' + str(machineOnForSec))
 		if time.time() > machineEndTime:
 			doStopMachine = True
 			stopMachine()
@@ -241,7 +239,8 @@ def startMachine(rfid):
 	global bridgeState
         
 	if bridgeState.isActive == True and bridgeSessionId != 0:
-                stopMachine()
+		logging.debug('door issue here???')
+		stopMachine()
 
 
 	bridgeState.ledDisplayState = LedDisplayStateEnum.THINKING
@@ -362,13 +361,24 @@ def errorReadingCard():
 	bridgeState.ledDisplayState = determineLedDisplayStateBasedOnBridgeState()
 
 
+def doStopButtonListener():
+	global bridgeState
+	while True: #bridgeState.isBridgeEnabled:
+		if bridgeState.isActive:
+			if GPIO.input(STOP_BUTTON_PIN) == 1:
+				stopButtonHandler()
+		sleep(.1)
+
+def startStopButtonListenerThread():
+	_thread.start_new_thread(doStopButtonListener, ())
+
 
 
 try:
-	GPIO.add_event_detect(STOP_BUTTON_PIN, GPIO.RISING, callback=stopButtonHandler)
+	#GPIO.add_event_detect(STOP_BUTTON_PIN, GPIO.RISING, callback=stopButtonHandler, bouncetime=200)#this wasnt working but I'll keep it around for now
 	startLedThread()
 	startHeartbeatThread()
-
+	startStopButtonListenerThread()
 
 	while bridgeState.isBridgeEnabled:
 		
